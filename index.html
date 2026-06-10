@@ -660,10 +660,13 @@ function parseLocal(text){
   const normalized=text.replace(/[,、，;；。\n\r]+/g,'\n').replace(/\s+元/g,'元').replace(/\s+块/g,'块');
   const segments=normalized.split('\n').map(s=>s.trim()).filter(Boolean);
   const items=[];
-  for(const seg of segments){
+  let pending='';  // 没有金额的片段（如"昨天吃晚餐牛排，350元"逗号前半段）攒起来，与下一个带金额的片段合并
+  for(const rawSeg of segments){
     // 匹配金额：可能带"元"、"块"、"¥"、"$"或纯数字
-    const m=seg.match(/(\d+(?:\.\d+)?)\s*[元块￥¥]?/);
-    if(!m)continue;
+    const m=rawSeg.match(/(\d+(?:\.\d+)?)\s*[元块￥¥]?/);
+    if(!m){pending+=(pending?' ':'')+rawSeg;continue}
+    const seg=pending?(pending+' '+rawSeg):rawSeg;
+    pending='';
     const amount=parseFloat(m[1]);
     if(amount<=0)continue;
     // 币种识别（泰铢/港币 自动按实时汇率换算为人民币）
