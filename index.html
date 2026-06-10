@@ -466,10 +466,20 @@ async function init(){
   EDIT_TOKEN=params.get('t');
 
   if(!HID){
+    // 浏览器里记住过账本 → 自动跳回去，避免每次新建空账本
+    const savedH=localStorage.getItem('jz_h');
+    if(savedH){
+      const savedT=localStorage.getItem('jz_t');
+      window.location.replace(window.location.pathname+'?h='+savedH+(savedT?'&t='+savedT:''));
+      return;
+    }
     // 首次访问，显示账本创建页
     setupNewHousehold();
     return;
   }
+  // 记住当前账本，下次打开裸链接自动进入
+  localStorage.setItem('jz_h',HID);
+  if(EDIT_TOKEN)localStorage.setItem('jz_t',EDIT_TOKEN);
 
   // 已有账本 ID，判断模式
   IS_EDIT=!!EDIT_TOKEN;
