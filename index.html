@@ -684,11 +684,23 @@ async function insertBatch(items){
     return {household_id:HID,date:dateKey(dateOffset===null?expDay:dateOffset),...rest};
   });
   document.getElementById('ai-status').textContent='保存中…';
-  const {error}=await supa.from('expenses').insert(rows);
+  const {data:inserted,error}=await supa.from('expenses').insert(rows).select();
   if(error){document.getElementById('ai-status').textContent='保存失败：'+(error.message||'');return}
   document.getElementById('ai-input').value='';
-  document.getElementById('ai-status').textContent=`✓ 已识别并录入 ${items.length} 条`;
-  setTimeout(()=>document.getElementById('ai-status').textContent='智能识别金额和分类',3000);
+  // 同步本地数据并跳转到记录所在日期，让用户立刻看到结果
+  (inserted||rows).forEach(r=>{
+    if(!DB.expenses[r.date])DB.expenses[r.date]=[];
+    if(!r.id||!DB.expenses[r.date].find(x=>x.id===r.id))DB.expenses[r.date].push(r);
+  });
+  const offs=[...new Set(items.map(it=>it.dateOffset===null?expDay:it.dateOffset))];
+  let msg=`✓ 已识别并录入 ${items.length} 条`;
+  if(offs.length===1&&offs[0]!==expDay){
+    expDay=offs[0];
+    msg+=`，已记到${dateLabel(expDay)}`;
+  }
+  renderExpenses();renderComments();
+  document.getElementById('ai-status').textContent=msg;
+  setTimeout(()=>document.getElementById('ai-status').textContent='智能识别金额和分类',5000);
 }
 
 // ============ 股市 ============
