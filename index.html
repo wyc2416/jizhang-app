@@ -223,7 +223,7 @@ textarea{resize:vertical;min-height:64px;line-height:1.5}
 
       <div class="card edit-only">
         <div class="card-title">✨ 一句话快速录入</div>
-        <textarea id="ai-input" placeholder="例如：午饭45，打车20，买了本书68，下午奶茶22"></textarea>
+        <textarea id="ai-input" placeholder="例如：午饭45，pepper lunch 558泰铢，打车20港币，下午奶茶22"></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
           <span style="flex:1;font-size:12px;color:var(--text-faint)" id="ai-status">智能识别金额和分类</span>
           <button class="btn btn-primary btn-sm" onclick="smartParse()">解析录入</button>
@@ -234,7 +234,10 @@ textarea{resize:vertical;min-height:64px;line-height:1.5}
         <div class="card-title">手动添加</div>
         <div class="input-row">
           <div class="field" style="min-width:110px"><label>描述</label><input id="exp-desc" placeholder="午饭、打车…"></div>
-          <div class="field" style="max-width:100px"><label>金额 (¥)</label><input id="exp-amount" type="number" min="0" step="0.01" placeholder="0.00"></div>
+          <div class="field" style="max-width:100px"><label>金额</label><input id="exp-amount" type="number" min="0" step="0.01" placeholder="0.00"></div>
+          <div class="field" style="max-width:110px"><label>币种</label>
+            <select id="exp-currency"><option value="CNY">¥ 人民币</option><option value="THB">฿ 泰铢</option><option value="HKD">HK$ 港币</option></select>
+          </div>
           <div class="field" style="max-width:90px"><label>类型</label>
             <select id="exp-type"><option value="expense">支出</option><option value="income">收入</option></select>
           </div>
@@ -404,6 +407,26 @@ function fmtD(d){return `${d.getMonth()+1}月${d.getDate()}日`}
 function fmt(n){return '¥'+(Math.round(n*100)/100).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
 
+// ============ 汇率（兑人民币）============
+const FX={CNY:1,THB:0.205,HKD:0.92}; // 兜底固定汇率，启动后自动更新为实时汇率
+const CUR_SYM={CNY:'¥',THB:'฿',HKD:'HK$'};
+async function loadRates(){
+  try{
+    const r=await fetch('https://open.er-api.com/v6/latest/CNY');
+    const j=await r.json();
+    if(j&&j.rates){
+      if(j.rates.THB)FX.THB=1/j.rates.THB;
+      if(j.rates.HKD)FX.HKD=1/j.rates.HKD;
+    }
+  }catch(e){/* 离线时使用兜底汇率 */}
+}
+function toCNY(amount,cur){return Math.round(amount*(FX[cur]||1)*100)/100}
+function detectCurrency(text){
+  if(/泰铢|[฿]|thb/i.test(text)||/\d\s*铢/.test(text))return 'THB';
+  if(/港币|港元|港幣|hkd|hk\$/i.test(text))return 'HKD';
+  return 'CNY';
+}
+
 function uuid(){
   if(crypto.randomUUID)return crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16)});
@@ -416,6 +439,7 @@ async function init(){
     return;
   }
   supa=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+  loadRates();
 
   const params=new URLSearchParams(window.location.search);
   HID=params.get('h');
@@ -548,9 +572,12 @@ async function addExpense(){
   const amount=parseFloat(document.getElementById('exp-amount').value);
   const type=document.getElementById('exp-type').value;
   const cat=document.getElementById('exp-cat').value;
+  const currency=document.getElementById('exp-currency').value;
   if(!desc||isNaN(amount)||amount<=0){toast('请填写描述和金额');return}
   const {error}=await supa.from('expenses').insert({
-    household_id:HID,date:dateKey(expDay),description:desc,amount,type,cat
+    household_id:HID,date:dateKey(expDay),description:desc,
+    amount:toCNY(amount,currency),type,cat,
+    currency,orig_amount:currency==='CNY'?null:amount
   });
   if(error){toast('保存失败');return}
   document.getElementById('exp-desc').value='';
@@ -582,7 +609,7 @@ function renderExpenses(){
       <div class="cat-dot" style="background:${CAT_COLORS[e.cat]||'#888'}"></div>
       <div class="item-info">
         <div class="item-name">${escapeHtml(e.description)}</div>
-        <div class="item-meta">${CAT_EMOJI[e.cat]||''} ${e.cat}</div>
+        <div class="item-meta">${CAT_EMOJI[e.cat]||''} ${e.cat}${e.currency&&e.currency!=='CNY'&&e.orig_amount?` · 原币 ${CUR_SYM[e.currency]||''}${Number(e.orig_amount).toLocaleString('zh-CN',{maximumFractionDigits:2})} ${e.currency}`:''}</div>
       </div>
       <span class="item-amount ${e.type}">${e.type==='expense'?'-':'+'} ${fmt(Number(e.amount))}</span>
       ${IS_EDIT?`<button class="item-del edit-only" onclick="delExpense('${e.id}')" aria-label="删除">×</button>`:''}
@@ -609,15 +636,17 @@ function parseLocal(text){
     if(!m)continue;
     const amount=parseFloat(m[1]);
     if(amount<=0)continue;
-    // 描述：移除金额相关部分
-    let desc=seg.replace(/(\d+(?:\.\d+)?)\s*[元块￥¥]?/g,'').replace(/[花了用收到给]/g,'').trim();
+    // 币种识别（泰铢/港币 自动按实时汇率换算为人民币）
+    const cur=detectCurrency(seg);
+    // 描述：移除金额和币种相关部分
+    let desc=seg.replace(/(\d+(?:\.\d+)?)\s*[元块铢￥¥฿]?/g,'').replace(/泰铢|港币|港元|港幣|人民币|thb|hkd|cny|hk\$/gi,'').replace(/[花了用收到给]/g,'').trim();
     if(!desc)desc='未命名';
     // 分类匹配
     let cat='其他',type='expense';
     for(const r of CAT_RULES){
       if(r.keys.some(k=>seg.includes(k))){cat=r.cat;type=r.type;break}
     }
-    items.push({description:desc,amount,type,cat});
+    items.push({description:desc,amount:toCNY(amount,cur),type,cat,currency:cur,orig_amount:cur==='CNY'?null:amount});
   }
   return items;
 }
