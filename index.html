@@ -275,9 +275,14 @@ textarea{resize:vertical;min-height:64px;line-height:1.5}
         <button class="btn-nav" onclick="changeDay(1,'stock')">›</button>
       </div>
 
+      <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:10px">
+        <button id="st-cur-hkd" class="btn btn-sm" onclick="setStockCur('HKD')">HK$ 港币</button>
+        <button id="st-cur-cny" class="btn btn-sm" onclick="setStockCur('CNY')">¥ 人民币</button>
+      </div>
+
       <div class="metric-grid">
-        <div class="metric"><div class="metric-label">今日盈亏</div><div class="metric-value" id="stock-pnl">¥0</div></div>
-        <div class="metric"><div class="metric-label">总持仓成本</div><div class="metric-value" id="stock-cost">¥0</div></div>
+        <div class="metric"><div class="metric-label">今日盈亏</div><div class="metric-value" id="stock-pnl">HK$0</div></div>
+        <div class="metric"><div class="metric-label">总持仓成本</div><div class="metric-value" id="stock-cost">HK$0</div></div>
         <div class="metric"><div class="metric-label">盈亏率</div><div class="metric-value" id="stock-rate">0%</div></div>
       </div>
 
@@ -288,8 +293,8 @@ textarea{resize:vertical;min-height:64px;line-height:1.5}
           <div class="field" style="max-width:100px"><label>市场</label>
             <select id="st-market"><option value="美股">🇺🇸 美股</option><option value="港股">🇭🇰 港股</option><option value="A股">🇨🇳 A股</option></select>
           </div>
-          <div class="field" style="max-width:100px"><label>盈亏 (¥)</label><input id="st-pnl" type="number" step="0.01" placeholder="负=亏"></div>
-          <div class="field" style="max-width:100px"><label>持仓成本</label><input id="st-cost" type="number" step="0.01" placeholder="可选"></div>
+          <div class="field" style="max-width:100px"><label>盈亏 (港币)</label><input id="st-pnl" type="number" step="0.01" placeholder="负=亏"></div>
+          <div class="field" style="max-width:100px"><label>成本 (港币)</label><input id="st-cost" type="number" step="0.01" placeholder="可选"></div>
           <button class="btn" onclick="addStock()">+ 添加</button>
         </div>
       </div>
@@ -421,6 +426,21 @@ async function loadRates(){
   }catch(e){/* 离线时使用兜底汇率 */}
 }
 function toCNY(amount,cur){return Math.round(amount*(FX[cur]||1)*100)/100}
+
+// 股市显示币种（数据以港币存储，可切换人民币显示）
+let stockCur=localStorage.getItem('stockCur')||'HKD';
+function fmtStock(n){
+  const v=stockCur==='HKD'?n:n*FX.HKD;
+  const sym=stockCur==='HKD'?'HK$':'¥';
+  return sym+(Math.round(v*100)/100).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function setStockCur(c){stockCur=c;localStorage.setItem('stockCur',c);renderStocks()}
+function updateStockCurBtns(){
+  const h=document.getElementById('st-cur-hkd'),c=document.getElementById('st-cur-cny');
+  if(!h||!c)return;
+  h.classList.toggle('btn-primary',stockCur==='HKD');
+  c.classList.toggle('btn-primary',stockCur==='CNY');
+}
 function detectCurrency(text){
   if(/泰铢|[฿]|thb/i.test(text)||/\d\s*铢/.test(text))return 'THB';
   if(/港币|港元|港幣|hkd|hk\$/i.test(text))return 'HKD';
@@ -579,7 +599,7 @@ async function addExpense(){
     amount:toCNY(amount,currency),type,cat,
     currency,orig_amount:currency==='CNY'?null:amount
   });
-  if(error){toast('保存失败');return}
+  if(error){toast('保存失败：'+(error.message||''));return}
   document.getElementById('exp-desc').value='';
   document.getElementById('exp-amount').value='';
   toast('✓ 已记录');
@@ -638,26 +658,34 @@ function parseLocal(text){
     if(amount<=0)continue;
     // 币种识别（泰铢/港币 自动按实时汇率换算为人民币）
     const cur=detectCurrency(seg);
-    // 描述：移除金额和币种相关部分
-    let desc=seg.replace(/(\d+(?:\.\d+)?)\s*[元块铢￥¥฿]?/g,'').replace(/泰铢|港币|港元|港幣|人民币|thb|hkd|cny|hk\$/gi,'').replace(/[花了用收到给]/g,'').trim();
+    // 日期识别（昨天/前天/大前天/今天，没写就记到当前选中的日期）
+    let dateOffset=null;
+    if(/大前天/.test(seg))dateOffset=-3;
+    else if(/前天/.test(seg))dateOffset=-2;
+    else if(/昨天|昨晚|昨日/.test(seg))dateOffset=-1;
+    else if(/今天|今日|今晚/.test(seg))dateOffset=0;
+    // 描述：移除金额、币种、日期相关部分
+    let desc=seg.replace(/(\d+(?:\.\d+)?)\s*(?:块钱|元|块|铢|[￥¥฿])?/g,'').replace(/泰铢|港币|港元|港幣|人民币|thb|hkd|cny|hk\$/gi,'').replace(/大前天|前天|昨天|昨晚|昨日|今天|今日|今晚/g,'').replace(/[花了用收到给钱]/g,'').trim();
     if(!desc)desc='未命名';
     // 分类匹配
     let cat='其他',type='expense';
     for(const r of CAT_RULES){
       if(r.keys.some(k=>seg.includes(k))){cat=r.cat;type=r.type;break}
     }
-    items.push({description:desc,amount:toCNY(amount,cur),type,cat,currency:cur,orig_amount:cur==='CNY'?null:amount});
+    items.push({description:desc,amount:toCNY(amount,cur),type,cat,currency:cur,orig_amount:cur==='CNY'?null:amount,dateOffset});
   }
   return items;
 }
 
 async function insertBatch(items){
   if(!IS_EDIT)return;
-  const date=dateKey(expDay);
-  const rows=items.map(it=>({household_id:HID,date,...it}));
+  const rows=items.map(it=>{
+    const {dateOffset,...rest}=it;
+    return {household_id:HID,date:dateKey(dateOffset===null?expDay:dateOffset),...rest};
+  });
   document.getElementById('ai-status').textContent='保存中…';
   const {error}=await supa.from('expenses').insert(rows);
-  if(error){document.getElementById('ai-status').textContent='保存失败';return}
+  if(error){document.getElementById('ai-status').textContent='保存失败：'+(error.message||'');return}
   document.getElementById('ai-input').value='';
   document.getElementById('ai-status').textContent=`✓ 已识别并录入 ${items.length} 条`;
   setTimeout(()=>document.getElementById('ai-status').textContent='智能识别金额和分类',3000);
@@ -672,7 +700,7 @@ async function addStock(){
   const market=document.getElementById('st-market').value;
   if(!name||isNaN(pnl)){toast('请填写名称和盈亏金额');return}
   const {error}=await supa.from('stocks').insert({household_id:HID,date:dateKey(stockDay),name,pnl,cost,market});
-  if(error){toast('保存失败');return}
+  if(error){toast('保存失败：'+(error.message||''));return}
   document.getElementById('st-name').value='';
   document.getElementById('st-pnl').value='';
   document.getElementById('st-cost').value='';
@@ -685,15 +713,16 @@ async function delStock(id){
 }
 
 function renderStocks(){
+  updateStockCurBtns();
   document.getElementById('stock-date-label').textContent=dateLabel(stockDay);
   const items=(DB.stocks[dateKey(stockDay)]||[]);
   const totalPnl=items.reduce((s,e)=>s+Number(e.pnl),0);
   const totalCost=items.reduce((s,e)=>s+Number(e.cost),0);
   const rate=totalCost>0?(totalPnl/totalCost*100):0;
   const p=document.getElementById('stock-pnl');
-  p.textContent=(totalPnl>=0?'+':'')+fmt(totalPnl);
+  p.textContent=(totalPnl>=0?'+':'')+fmtStock(totalPnl);
   p.className='metric-value '+(totalPnl>0?'pos':totalPnl<0?'neg':'');
-  document.getElementById('stock-cost').textContent=fmt(totalCost);
+  document.getElementById('stock-cost').textContent=fmtStock(totalCost);
   const r=document.getElementById('stock-rate');
   r.textContent=(rate>=0?'+':'')+rate.toFixed(2)+'%';
   r.className='metric-value '+(rate>0?'pos':rate<0?'neg':'');
@@ -707,9 +736,9 @@ function renderStocks(){
     return`<div class="list-item">
       <div class="item-info">
         <div class="item-name">${escapeHtml(e.name)} <span class="badge ${badge}">${pnl>0?'盈利':pnl<0?'亏损':'持平'}</span> <span class="badge market">${e.market}</span></div>
-        ${cost?`<div class="item-meta">成本 ${fmt(cost)}${pct}</div>`:'<div class="item-meta">未填写成本</div>'}
+        ${cost?`<div class="item-meta">成本 ${fmtStock(cost)}${pct}</div>`:'<div class="item-meta">未填写成本</div>'}
       </div>
-      <span class="item-amount ${badge}">${pnl>=0?'+':''}${fmt(pnl)}</span>
+      <span class="item-amount ${badge}">${pnl>=0?'+':''}${fmtStock(pnl)}</span>
       ${IS_EDIT?`<button class="item-del edit-only" onclick="delStock('${e.id}')" aria-label="删除">×</button>`:''}
     </div>`;
   }).join('');
@@ -757,7 +786,7 @@ function renderCharts(){
   document.getElementById('stat-total-out').textContent=fmt(allOut);
   document.getElementById('stat-total-in').textContent=fmt(allIn);
   const sp=document.getElementById('stat-stock-pnl');
-  sp.textContent=(allPnl>=0?'+':'')+fmt(allPnl);
+  sp.textContent=(allPnl>=0?'+':'')+fmtStock(allPnl);
   sp.className='metric-value '+(allPnl>0?'pos':allPnl<0?'neg':'');
 
   const catTotals={};
@@ -791,7 +820,7 @@ function renderCharts(){
   barChart=new Chart(document.getElementById('bar-chart'),{
     type:'bar',
     data:{labels,datasets:[{data:barData,backgroundColor:barCols,borderRadius:4}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>(ctx.parsed.y>=0?'+':'')+fmt(ctx.parsed.y)}}},scales:{y:{ticks:{callback:v=>(v>=0?'+':'')+v,font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}},x:{ticks:{font:{size:10}},grid:{display:false}}}}
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>(ctx.parsed.y>=0?'+':'')+fmtStock(ctx.parsed.y)}}},scales:{y:{ticks:{callback:v=>(v>=0?'+':'')+v,font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}},x:{ticks:{font:{size:10}},grid:{display:false}}}}
   });
 }
 
@@ -800,10 +829,20 @@ function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 // 启动
 init();
 
-// 回车提交评论
+// 回车提交
 document.addEventListener('DOMContentLoaded',()=>{
   const ci=document.getElementById('cmt-input');
   if(ci)ci.addEventListener('keypress',e=>{if(e.key==='Enter')addComment()});
+  ['exp-desc','exp-amount'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.addEventListener('keypress',e=>{if(e.key==='Enter')addExpense()});
+  });
+  ['st-name','st-pnl','st-cost'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.addEventListener('keypress',e=>{if(e.key==='Enter')addStock()});
+  });
+  const ai=document.getElementById('ai-input');
+  if(ai)ai.addEventListener('keypress',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();smartParse()}});
 });
 window.addEventListener('keypress',e=>{
   if(e.key==='Enter'&&document.activeElement&&document.activeElement.id==='cmt-input'){addComment()}
